@@ -4,6 +4,37 @@ This guide walks you through deploying the entire stack from scratch — a first
 
 ---
 
+## What's manual vs. automated
+
+### Manual — one-time bootstrap (this guide)
+
+These steps must be done by hand before GitHub Actions can take over. Most are AWS console or CLI operations that are prerequisites for automation itself.
+
+| Step | Why it's manual |
+|---|---|
+| Create `TerraformDeployUser` IAM user + `aws configure` | You need AWS access to create the very first IAM resource |
+| Buy/delegate domain in Route53 | Requires DNS propagation and/or registrar login |
+| Create S3 state bucket + DynamoDB lock table | Must exist before `terraform init` can run anywhere |
+| Update `backend.tf` files with bucket/table names | Config change that depends on the above |
+| Create GitHub OIDC provider in IAM | Prerequisite for GitHub Actions to authenticate with AWS |
+| Create `GitHubActionsDeployRole` | Prerequisite for GitHub Actions to authenticate with AWS |
+| Add GitHub secrets + variables | Prerequisite for workflows to know what to deploy |
+| Run `terraform apply` locally the first time | Creates ECR, ECS, RDS, ALB, Route53 records, etc. |
+| Push first Docker image to ECR | ECS needs an image to pass health checks — ECR didn't exist before the step above |
+
+### Automated via GitHub Actions (everything after bootstrap)
+
+| Trigger | Workflow | What runs |
+|---|---|---|
+| PR touching `infra/backend/**` | `infra-backend.yml` | `terraform plan` → posted as PR comment |
+| Merge to main (backend infra) | `infra-backend.yml` | `terraform apply` |
+| PR touching `infra/frontend/**` | `infra-frontend.yml` | `terraform plan` → posted as PR comment |
+| Merge to main (frontend infra) | `infra-frontend.yml` | `terraform apply` |
+| Merge to main touching `app/**` | `backend-deploy.yml` | Docker build → ECR push → ECS redeploy |
+| Merge to main touching `web/**` | `frontend-deploy.yml` | `next build` → S3 sync → CloudFront invalidate |
+
+---
+
 ## Prerequisites
 
 Install these tools before continuing:
