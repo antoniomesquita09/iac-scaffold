@@ -1,0 +1,12 @@
+aws_region        = "us-east-1"
+project_name      = "myapp"
+domain_name       = "example.com"
+api_subdomain     = "api"
+app_port          = 8080
+app_count         = 1
+fargate_cpu       = 256
+fargate_memory    = 512
+db_name           = "appdb"
+db_username       = "appuser"
+db_password       = "CHANGE_ME_USE_A_STRONG_PASSWORD"
+db_instance_class = "db.t3.micro"
