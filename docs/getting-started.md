@@ -8,30 +8,26 @@ This guide walks you through deploying the entire stack from scratch — a first
 
 ### Manual — one-time bootstrap (this guide)
 
-These steps must be done by hand before GitHub Actions can take over. Most are AWS console or CLI operations that are prerequisites for automation itself.
+Do these steps in order before GitHub Actions can take over:
 
-| Step | Why it's manual |
-|---|---|
-| Create `TerraformDeployUser` IAM user + `aws configure` | You need AWS access to create the very first IAM resource |
-| Buy/delegate domain in Route53 | Requires DNS propagation and/or registrar login |
-| Create S3 state bucket + DynamoDB lock table | Must exist before `terraform init` can run anywhere |
-| Update `backend.tf` files with bucket/table names | Config change that depends on the above |
-| Create GitHub OIDC provider in IAM | Prerequisite for GitHub Actions to authenticate with AWS |
-| Create `GitHubActionsDeployRole` | Prerequisite for GitHub Actions to authenticate with AWS |
-| Add GitHub secrets + variables | Prerequisite for workflows to know what to deploy |
-| Run `terraform apply` locally the first time | Creates ECR, ECS, RDS, ALB, Route53 records, etc. |
-| Push first Docker image to ECR | ECS needs an image to pass health checks — ECR didn't exist before the step above |
+1. [Prerequisites](#prerequisites) — install Terraform, AWS CLI, Docker
+2. [Create TerraformDeployUser IAM user + `aws configure`](#step-1--create-an-aws-iam-user-for-terraform)
+3. [Buy or delegate domain in Route53](#step-2--register-or-delegate-your-domain-in-route53)
+4. [Create S3 state bucket + DynamoDB lock table](#step-3--create-the-terraform-remote-state-bucket)
+5. [Configure backend variables](#step-4--configure-backend-variables)
+6. [Deploy backend infrastructure — `terraform apply`](#step-5--deploy-the-backend)
+7. [Push first Docker image to ECR](#step-6--push-your-first-docker-image)
+8. [Configure frontend variables](#step-7--configure-frontend-variables)
+9. [Deploy frontend infrastructure — `terraform apply`](#step-8--deploy-the-frontend)
+10. [Set up GitHub Actions — OIDC provider, role, secrets](#step-9--set-up-github-actions)
+11. [Verify end-to-end](#step-10--verify-end-to-end)
 
 ### Automated via GitHub Actions (everything after bootstrap)
 
-| Trigger | Workflow | What runs |
-|---|---|---|
-| PR touching `infra/backend/**` | `infra-backend.yml` | `terraform plan` → posted as PR comment |
-| Merge to main (backend infra) | `infra-backend.yml` | `terraform apply` |
-| PR touching `infra/frontend/**` | `infra-frontend.yml` | `terraform plan` → posted as PR comment |
-| Merge to main (frontend infra) | `infra-frontend.yml` | `terraform apply` |
-| Merge to main touching `app/**` | `backend-deploy.yml` | Docker build → ECR push → ECS redeploy |
-| Merge to main touching `web/**` | `frontend-deploy.yml` | `next build` → S3 sync → CloudFront invalidate |
+See [docs/cicd.md](cicd.md) for the full workflow reference. In short:
+
+- **Infra changes** — open a PR touching `infra/backend/**` or `infra/frontend/**`, review the `terraform plan` comment, merge to apply
+- **App deploys** — push to `main`; backend and frontend deploy automatically on file changes
 
 ---
 
