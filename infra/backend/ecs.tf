@@ -39,10 +39,21 @@ resource "aws_ecs_task_definition" "app" {
         }
       ]
 
+      # Connection components — the app builds its own connection string.
+      # Host/port/name/user are non-sensitive; the password is injected from
+      # the RDS-managed secret so it never appears in the task definition.
+      environment = [
+        { name = "DB_HOST", value = aws_db_instance.postgres.address },
+        { name = "DB_PORT", value = tostring(aws_db_instance.postgres.port) },
+        { name = "DB_NAME", value = var.db_name },
+        { name = "DB_USER", value = var.db_username },
+        { name = "DB_SSLMODE", value = "require" },
+      ]
+
       secrets = [
         {
-          name      = "DATABASE_URL"
-          valueFrom = aws_secretsmanager_secret.db_url.arn
+          name      = "DB_PASSWORD"
+          valueFrom = "${aws_db_instance.postgres.master_user_secret[0].secret_arn}:password::"
         }
       ]
 

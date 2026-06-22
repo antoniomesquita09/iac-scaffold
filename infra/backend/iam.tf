@@ -30,7 +30,7 @@ resource "aws_iam_role_policy" "ecs_task_execution_secrets" {
       {
         Effect   = "Allow"
         Action   = ["secretsmanager:GetSecretValue"]
-        Resource = aws_secretsmanager_secret.db_url.arn
+        Resource = aws_db_instance.postgres.master_user_secret[0].secret_arn
       }
     ]
   })

@@ -39,7 +39,12 @@ output "rds_endpoint" {
   sensitive   = true
 }
 
+output "db_host" {
+  description = "RDS host only (no port) — set as DB_HOST in GitHub Actions variables for migrations"
+  value       = aws_db_instance.postgres.address
+}
+
 output "db_secret_arn" {
-  description = "Secrets Manager ARN storing DATABASE_URL — copy to GitHub Actions variable"
-  value       = aws_secretsmanager_secret.db_url.arn
+  description = "RDS-managed Secrets Manager ARN (master user/password) — set as DB_SECRET_ARN in GitHub Actions variables"
+  value       = aws_db_instance.postgres.master_user_secret[0].secret_arn
 }
