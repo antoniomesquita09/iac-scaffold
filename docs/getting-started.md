@@ -318,10 +318,9 @@ cd infra/frontend && terraform destroy
 |---|---|
 | ECS Fargate (256 CPU / 512 MB, 1 task) | ~$9 |
 | RDS db.t3.micro PostgreSQL | ~$15 |
-| NAT Gateway | ~$32 |
 | ALB | ~$16 |
 | S3 + CloudFront (low traffic) | ~$1 |
 | Route53 hosted zone | $0.50 |
-| **Total** | **~$73/month** |
+| **Total** | **~$41/month** |
 
-> The NAT Gateway is the largest cost for small workloads. For dev/testing you can save ~$32/month by assigning public IPs to ECS tasks directly (`assign_public_ip = true` in `ecs.tf`) and removing the NAT — but this exposes your containers to the internet.
+> ECS tasks run in public subnets with a public IP (`assign_public_ip = true`), so no NAT Gateway is needed. Inbound traffic is still restricted to the ALB only via security groups — no direct internet access to the containers. If you move to production, add a NAT Gateway, move ECS tasks back to private subnets, and set `assign_public_ip = false` in `infra/backend/ecs.tf`.
