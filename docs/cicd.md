@@ -1,6 +1,17 @@
 # CI/CD with GitHub Actions
 
-The CI/CD pipeline uses **OIDC (OpenID Connect)** to authenticate GitHub Actions with AWS — no long-lived credentials stored as GitHub secrets.
+There are four workflows in `.github/workflows/`:
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| `infra-backend.yml` | PR touching `infra/backend/**` | Posts `terraform plan` as PR comment |
+| `infra-backend.yml` | Merge to `main` | Runs `terraform apply` |
+| `infra-frontend.yml` | PR touching `infra/frontend/**` | Posts `terraform plan` as PR comment |
+| `infra-frontend.yml` | Merge to `main` | Runs `terraform apply` |
+| `backend-deploy.yml` | Merge to `main` touching `app/**` | Build Docker → ECR → redeploy ECS |
+| `frontend-deploy.yml` | Merge to `main` touching `web/**` | `next build` → S3 sync → CloudFront invalidate |
+
+All workflows use **OIDC** to authenticate with AWS — no long-lived credentials stored as GitHub secrets.
 
 ---
 
@@ -17,14 +28,14 @@ GitHub Actions runner
         ▼
   AWS IAM (STS AssumeRoleWithWebIdentity)
         │
-        │  3. Verify JWT signature against GitHub's public keys
+        │  3. Verify JWT against GitHub's public keys
         │  4. Check subject claim matches your repo/branch
-        │  5. Issue temporary AWS credentials (1 hour TTL)
+        │  5. Issue temporary credentials (1 hour TTL)
         ▼
   GitHub Actions step runs with those credentials
 ```
 
-Result: no `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` stored anywhere. The temporary credentials expire automatically.
+Result: no `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` stored anywhere.
 
 ---
 
@@ -50,12 +61,6 @@ aws iam create-open-id-connect-provider \
   --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1
 ```
 
-Verify:
-
-```bash
-aws iam list-open-id-connect-providers
-```
-
 ---
 
 ## Step 2 — Create the `GitHubActionsDeployRole`
@@ -74,112 +79,128 @@ arn:aws:iam::YOUR_ACCOUNT_ID:role/GitHubActionsDeployRole
 
 Go to your GitHub repo → **Settings → Secrets and variables → Actions**.
 
-### Secrets (sensitive — encrypted)
+### Secrets (sensitive — encrypted, never visible in logs)
 
 | Secret name | Value |
 |---|---|
 | `AWS_ROLE_ARN` | `arn:aws:iam::YOUR_ACCOUNT_ID:role/GitHubActionsDeployRole` |
+| `TF_VAR_DB_PASSWORD` | Your database password |
 
 ### Variables (non-sensitive — visible in logs)
 
-Run `terraform output` in `backend/` and `frontend/` to get these values:
+**Shared:**
 
-| Variable name | Where to get it | Example |
+| Variable | Value |
+|---|---|
+| `AWS_REGION` | `us-east-1` |
+| `TF_VAR_AWS_REGION` | `us-east-1` |
+| `TF_VAR_PROJECT_NAME` | `myapp` |
+| `TF_VAR_DOMAIN_NAME` | `example.com` |
+
+**Backend-specific** (from `terraform output` in `infra/backend/`):
+
+| Variable | Source | Example |
 |---|---|---|
-| `AWS_REGION` | Your choice | `us-east-1` |
+| `TF_VAR_API_SUBDOMAIN` | your choice | `api` |
+| `TF_VAR_APP_PORT` | your Go app | `8080` |
+| `TF_VAR_APP_COUNT` | your choice | `1` |
+| `TF_VAR_FARGATE_CPU` | your choice | `256` |
+| `TF_VAR_FARGATE_MEMORY` | your choice | `512` |
+| `TF_VAR_DB_NAME` | your choice | `appdb` |
+| `TF_VAR_DB_USERNAME` | your choice | `appuser` |
+| `TF_VAR_DB_INSTANCE_CLASS` | your choice | `db.t3.micro` |
 | `ECR_REPOSITORY` | `terraform output ecr_repository_url` | `123456789.dkr.ecr.us-east-1.amazonaws.com/myapp` |
 | `ECS_CLUSTER` | `terraform output ecs_cluster_name` | `myapp-cluster` |
 | `ECS_SERVICE` | `terraform output ecs_service_name` | `myapp-service` |
 | `ECS_TASK_DEFINITION` | `terraform output ecs_task_definition_family` | `myapp` |
 | `CONTAINER_NAME` | `terraform output container_name` | `myapp` |
-| `S3_BUCKET` | `terraform output s3_bucket_name` (frontend) | `myapp-frontend-123456789` |
-| `CF_DISTRIBUTION_ID` | `terraform output cloudfront_distribution_id` (frontend) | `E1234ABCDE` |
-| `NEXT_PUBLIC_API_URL` | Your API URL | `https://api.example.com` |
+
+**Frontend-specific** (from `terraform output` in `infra/frontend/`):
+
+| Variable | Source | Example |
+|---|---|---|
+| `TF_VAR_ROUTE53_ZONE_ID` | Route53 console | `Z0123456789ABCDEFGHIJ` |
+| `S3_BUCKET` | `terraform output s3_bucket_name` | `myapp-frontend-123456789` |
+| `CF_DISTRIBUTION_ID` | `terraform output cloudfront_distribution_id` | `E1234ABCDE` |
+| `NEXT_PUBLIC_API_URL` | your API URL | `https://api.example.com` |
 
 ---
 
-## Step 4 — Configure path filters for your monorepo
+## Step 4 — Update path filters
 
-The workflows trigger only when relevant files change. Update the `paths:` filters to match your directory structure:
+The app deploy workflows trigger on changes to your app directories. Update the `paths:` filters to match your repo layout:
 
 **`backend-deploy.yml`** — change `app/**` to wherever your Go code lives:
 ```yaml
 paths:
-  - 'app/**'                         # ← update this
-  - '.github/workflows/backend-deploy.yml'
+  - 'app/**'           # ← update to your Go project directory
 ```
 
 **`frontend-deploy.yml`** — change `web/**` to wherever your Next.js project lives:
 ```yaml
 paths:
-  - 'web/**'                         # ← update this
-  - '.github/workflows/frontend-deploy.yml'
+  - 'web/**'           # ← update to your Next.js project directory
 ```
 
-Also update `working-directory` in the frontend workflow to match:
+Also update `working-directory` in `frontend-deploy.yml` to match:
 ```yaml
 - name: Install dependencies
-  working-directory: web             # ← update this
+  working-directory: web    # ← update this
 ```
 
 ---
 
 ## Deployment flows
 
-### Backend deploy (on push to `main` with Go changes)
+### Infrastructure change (PR → merge)
 
 ```
-Push to main
+Open PR with infra/backend/** changes
      │
      ▼
-Checkout code
+infra-backend.yml (plan job)
+  terraform init + validate + plan
+  Post plan diff as PR comment
      │
      ▼
-Assume GitHubActionsDeployRole via OIDC
+Review plan, merge PR
      │
      ▼
-Login to ECR
+infra-backend.yml (apply job)
+  terraform init + apply -auto-approve
      │
      ▼
-docker build -t <ecr>:<sha> ./app
-docker push
-     │
-     ▼
-aws ecs describe-task-definition → task-definition.json
-     │
-     ▼
-Render new task def with updated image URI
-     │
-     ▼
-aws ecs update-service (rolling deploy, waits for stability)
-     │
-     ▼
-Done ✓
+Infrastructure updated ✓
 ```
 
-### Frontend deploy (on push to `main` with Next.js changes)
+### Backend app deploy
 
 ```
-Push to main
+Push to main with app/** changes
      │
      ▼
-Checkout code
+backend-deploy.yml
+  docker build → push to ECR
+  Render new ECS task definition
+  aws ecs update-service (rolling, waits for stability)
      │
      ▼
-npm ci && npm run build → out/
+New Go version live ✓
+```
+
+### Frontend deploy
+
+```
+Push to main with web/** changes
      │
      ▼
-Assume GitHubActionsDeployRole via OIDC
+frontend-deploy.yml
+  npm ci && npm run build → out/
+  aws s3 sync (HTML: no-cache | JS/CSS: 1-year immutable)
+  CloudFront invalidation
      │
      ▼
-aws s3 sync out/ s3://bucket --delete
-(HTML: no-cache | JS/CSS: 1-year immutable)
-     │
-     ▼
-aws cloudfront create-invalidation --paths "/*"
-     │
-     ▼
-Done ✓
+New Next.js version live ✓
 ```
 
 ---
@@ -192,9 +213,14 @@ Done ✓
 - Confirm the OIDC provider exists in IAM in the same account as the role
 - Check that `permissions: id-token: write` is set in the workflow
 
-### "Error: Cannot connect to the Docker daemon"
+### Terraform plan fails with "Error acquiring the state lock"
 
-Not relevant here — GitHub-hosted runners include Docker. If you're using self-hosted runners, install Docker on them.
+A previous run crashed mid-apply. Manually release the lock:
+
+```bash
+terraform force-unlock <LOCK_ID>
+# Lock ID is shown in the error message
+```
 
 ### ECS deployment stuck "waiting for service stability"
 

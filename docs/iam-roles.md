@@ -9,12 +9,12 @@ Five IAM roles/users are required to run this stack. This document lists each on
 | Name | Type | Used by |
 |---|---|---|
 | `TerraformDeployUser` | IAM User | You, when running `terraform apply` locally |
-| `GitHubActionsDeployRole` | IAM Role (OIDC) | GitHub Actions CI/CD |
+| `GitHubActionsDeployRole` | IAM Role (OIDC) | All GitHub Actions workflows |
 | `<project>-ecs-execution-role` | IAM Role | ECS control plane (pull images, write logs) |
 | `<project>-ecs-task-role` | IAM Role | Your running Go application |
 | `rds-enhanced-monitoring` | IAM Role | RDS Enhanced Monitoring (optional) |
 
-Roles 3 and 4 are **created automatically by Terraform** (`backend/iam.tf`).  
+Roles 3 and 4 are **created automatically by Terraform** (`infra/backend/iam.tf`).  
 Roles 1, 2, and 5 must be created manually.
 
 ---
@@ -93,28 +93,30 @@ Used for running `terraform plan` and `terraform apply` from your laptop. Not us
 }
 ```
 
-> **Security note:** These are broad permissions suitable for a personal/small-team setup. For stricter environments, scope each `Resource` to the specific ARNs created by your project (e.g. `arn:aws:s3:::myapp-*`).
+> **Security note:** These are broad permissions suitable for a personal/small-team setup. For stricter environments, scope each `Resource` to specific ARNs (e.g. `arn:aws:s3:::myapp-*`).
 
 ---
 
 ## 2. GitHub Actions OIDC Role (`GitHubActionsDeployRole`)
 
-Used by GitHub Actions to push Docker images to ECR, redeploy ECS, sync S3, and invalidate CloudFront. Uses OIDC — **no long-lived credentials stored in GitHub**.
+Used by **all four GitHub Actions workflows** — both Terraform (infra) and app deploys (ECS, S3/CloudFront). Uses OIDC — **no long-lived credentials stored in GitHub**.
 
-See [docs/cicd.md](cicd.md) for the full OIDC setup walkthrough.
+This role needs two sets of permissions:
+- **Terraform permissions** — to create/modify/destroy all AWS resources (used by `infra-backend.yml` and `infra-frontend.yml`)
+- **Deploy permissions** — to push images to ECR, update ECS, sync S3, invalidate CloudFront (used by `backend-deploy.yml` and `frontend-deploy.yml`)
 
 ### Create via AWS console
 
 1. IAM → Roles → Create role
 2. Trusted entity type: **Web identity**
-3. Identity provider: `token.actions.githubusercontent.com` *(create it first — see cicd.md)*
+3. Identity provider: `token.actions.githubusercontent.com` *(create it first — see [cicd.md](cicd.md))*
 4. Audience: `sts.amazonaws.com`
 5. Add condition: `token.actions.githubusercontent.com:sub` = `repo:YOUR_ORG/YOUR_REPO:ref:refs/heads/main`
-6. Attach the policy below
+6. Attach the two policies below
 7. Name the role `GitHubActionsDeployRole`
-8. Copy the role ARN — you'll add it as `AWS_ROLE_ARN` in GitHub Secrets
+8. Copy the role ARN — add it as `AWS_ROLE_ARN` in GitHub Secrets
 
-### Trust policy (auto-generated from step 2–5)
+### Trust policy (auto-generated from steps 2–5)
 
 ```json
 {
@@ -137,7 +139,70 @@ See [docs/cicd.md](cicd.md) for the full OIDC setup walkthrough.
 }
 ```
 
-### Permissions policy
+### Policy 1 — Terraform permissions (for `infra-*.yml` workflows)
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ComputeAndNetworking",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:*",
+        "ecs:*",
+        "ecr:*",
+        "elasticloadbalancing:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "Database",
+      "Effect": "Allow",
+      "Action": ["rds:*"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DNS",
+      "Effect": "Allow",
+      "Action": ["route53:*", "acm:*"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "Storage",
+      "Effect": "Allow",
+      "Action": ["s3:*", "cloudfront:*"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "Secrets",
+      "Effect": "Allow",
+      "Action": ["secretsmanager:*"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "Logging",
+      "Effect": "Allow",
+      "Action": ["logs:*"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "IAMForECSRoles",
+      "Effect": "Allow",
+      "Action": ["iam:*"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "TerraformStateLock",
+      "Effect": "Allow",
+      "Action": ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"],
+      "Resource": "arn:aws:dynamodb:*:*:table/*-tfstate-lock"
+    }
+  ]
+}
+```
+
+### Policy 2 — Deploy permissions (for `backend-deploy.yml` and `frontend-deploy.yml`)
 
 ```json
 {
@@ -209,13 +274,13 @@ See [docs/cicd.md](cicd.md) for the full OIDC setup walkthrough.
 }
 ```
 
-Replace `YOUR_ACCOUNT_ID`, `YOUR_ORG/YOUR_REPO`, and `YOUR_PROJECT_NAME` with your actual values.
+> You can combine both policies into a single inline policy or attach them as two separate managed policies — either works. Replace `YOUR_ACCOUNT_ID`, `YOUR_ORG/YOUR_REPO`, and `YOUR_PROJECT_NAME` with actual values.
 
 ---
 
 ## 3. ECS Task Execution Role (`<project>-ecs-execution-role`)
 
-**Created automatically by Terraform** in `backend/iam.tf`. No manual steps needed.
+**Created automatically by Terraform** in `infra/backend/iam.tf`. No manual steps needed.
 
 Used by the ECS control plane to:
 - Pull container images from ECR
@@ -230,11 +295,11 @@ Attached policies:
 
 ## 4. ECS Task Role (`<project>-ecs-task-role`)
 
-**Created automatically by Terraform** in `backend/iam.tf`. No manual steps needed.
+**Created automatically by Terraform** in `infra/backend/iam.tf`. No manual steps needed.
 
 This is the role your **Go application** runs as. It starts empty — add permissions here as your app grows.
 
-Common additions to make in `backend/iam.tf`:
+Common additions to make in `infra/backend/iam.tf`:
 
 ```hcl
 # Example: allow the app to send emails via SES
@@ -260,8 +325,8 @@ resource "aws_iam_role_policy" "ecs_task_s3" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect = "Allow"
-      Action = ["s3:GetObject", "s3:PutObject"]
+      Effect   = "Allow"
+      Action   = ["s3:GetObject", "s3:PutObject"]
       Resource = "arn:aws:s3:::my-uploads-bucket/*"
     }]
   })
@@ -283,7 +348,7 @@ Only needed if you enable `monitoring_interval` on the RDS instance (provides OS
 
 ### Enable in Terraform
 
-Add to `aws_db_instance` in `backend/rds.tf`:
+Add to `aws_db_instance` in `infra/backend/rds.tf`:
 
 ```hcl
 monitoring_interval = 60

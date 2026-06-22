@@ -76,7 +76,7 @@ Either way, confirm your zone exists:
 aws route53 list-hosted-zones-by-name --dns-name example.com
 ```
 
-Note the **Hosted Zone ID** — you will need it for the frontend `terraform.tfvars`.
+Note the **Hosted Zone ID** — you will need it for the frontend `terraform.tfvars` and GitHub variables.
 
 ---
 
@@ -112,7 +112,7 @@ aws dynamodb create-table \
 Now update both `backend.tf` files with your actual bucket and table names:
 
 ```bash
-# backend/backend.tf  and  frontend/backend.tf
+# infra/backend/backend.tf  and  infra/frontend/backend.tf
 bucket         = "myapp-tfstate"
 dynamodb_table = "myapp-tfstate-lock"
 ```
@@ -122,7 +122,7 @@ dynamodb_table = "myapp-tfstate-lock"
 ## Step 4 — Configure backend variables
 
 ```bash
-cd backend
+cd infra/backend
 cp terraform.tfvars.example terraform.tfvars
 ```
 
@@ -150,7 +150,7 @@ db_instance_class = "db.t3.micro"
 ## Step 5 — Deploy the backend
 
 ```bash
-cd backend
+cd infra/backend
 terraform init
 terraform plan    # review what will be created
 terraform apply   # type 'yes' to confirm
@@ -179,7 +179,7 @@ The ECS service starts but will fail health checks until a real image is in ECR.
 
 ```bash
 # From your Go project directory (where your Dockerfile lives)
-ECR_URL=$(cd /path/to/iac-scaffold/backend && terraform output -raw ecr_repository_url)
+ECR_URL=$(cd /path/to/iac-scaffold/infra/backend && terraform output -raw ecr_repository_url)
 REGION="us-east-1"
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 
@@ -213,7 +213,7 @@ curl https://api.example.com/health
 ## Step 7 — Configure frontend variables
 
 ```bash
-cd ../frontend
+cd ../../infra/frontend
 cp terraform.tfvars.example terraform.tfvars
 ```
 
@@ -243,7 +243,7 @@ module.exports = nextConfig
 ## Step 8 — Deploy the frontend
 
 ```bash
-cd frontend
+cd infra/frontend
 terraform init
 terraform plan
 terraform apply
@@ -306,8 +306,8 @@ aws cloudfront create-invalidation \
   --paths "/*"
 
 # Destroy everything (be careful!)
-cd backend && terraform destroy
-cd frontend && terraform destroy
+cd infra/backend && terraform destroy
+cd infra/frontend && terraform destroy
 ```
 
 ---
