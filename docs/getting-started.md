@@ -166,11 +166,10 @@ fargate_cpu       = 256
 fargate_memory    = 512
 db_name           = "appdb"
 db_username       = "appuser"
-db_password       = "a-very-strong-password-here"
 db_instance_class = "db.t3.micro"
 ```
 
-> **Never commit `terraform.tfvars`** — it is in `.gitignore` because it contains your database password.
+> There is **no `db_password`** — RDS generates and manages the master password in Secrets Manager (`manage_master_user_password = true`), so it never lands in `terraform.tfvars` or in the Terraform state. Keep `terraform.tfvars` out of git anyway (it's in `.gitignore`).
 
 ---
 
@@ -183,7 +182,7 @@ terraform plan    # review what will be created
 terraform apply   # type 'yes' to confirm
 ```
 
-This creates (in order): VPC → subnets → NAT → security groups → ECR → IAM roles → RDS → ALB → ACM cert → ECS cluster → Route53 records.
+This creates (in order): VPC → public subnets → internet gateway → security groups → ECR → IAM roles → RDS → ALB → ACM cert → ECS cluster → Route53 records.
 
 **Takes ~15 minutes** — mostly waiting for RDS to provision and ACM to validate DNS.
 
@@ -196,7 +195,10 @@ terraform output
 Key values to save for later:
 - `ecr_repository_url` — your Docker push target
 - `ecs_cluster_name`, `ecs_service_name`, `ecs_task_definition_family`, `container_name` — for GitHub Actions
-- `db_secret_arn` — Secrets Manager ARN (optional, for debugging)
+- `db_host` — RDS host, for the migration job (GitHub variable `DB_HOST`)
+- `db_secret_arn` — RDS-managed secret ARN, for the migration job (GitHub variable `DB_SECRET_ARN`)
+
+> **How the app gets its DB credentials:** the ECS task receives `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER` and `DB_SSLMODE` as plain environment variables, plus `DB_PASSWORD` injected from the RDS-managed secret. Your app should build its own connection string from these — it does **not** receive a ready-made `DATABASE_URL`.
 
 ---
 
@@ -350,4 +352,6 @@ cd infra/frontend && terraform destroy
 | Route53 hosted zone | $0.50 |
 | **Total** | **~$41/month** |
 
-> ECS tasks run in public subnets with a public IP (`assign_public_ip = true`), so no NAT Gateway is needed. Inbound traffic is still restricted to the ALB only via security groups — no direct internet access to the containers. If you move to production, add a NAT Gateway, move ECS tasks back to private subnets, and set `assign_public_ip = false` in `infra/backend/ecs.tf`.
+> **Networking note (cost & simplicity trade-off):** everything runs in public subnets, so there's no NAT Gateway (~$32/mo saved). ECS tasks get a public IP (`assign_public_ip = true`) but inbound is still restricted to the ALB via security groups. The **RDS instance is publicly reachable** (`publicly_accessible = true`) so migrations can run from GitHub Actions — it's protected by its security group and the RDS-managed master password. For production, consider: move ECS tasks and RDS to private subnets (add a NAT Gateway, set `assign_public_ip = false`, `publicly_accessible = false`), restrict the RDS security group to known IPs, and run migrations via an in-VPC ECS run-task instead.
+
+> **Migrations:** schema migrations run automatically in `backend-deploy.yml` (Flyway, before the new image deploys). Put your `.sql` files in a `migrations/` directory — see [docs/cicd.md](cicd.md).

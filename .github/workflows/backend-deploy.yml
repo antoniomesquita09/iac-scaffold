@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'app/**'
+      - 'migrations/**'
       - '.github/workflows/backend-deploy.yml'
 
 # Required for OIDC token exchange with AWS
@@ -13,9 +14,47 @@ permissions:
   contents: read
 
 jobs:
+  # Apply database migrations before deploying new code. RDS is publicly
+  # reachable (see infra/backend), so Flyway runs straight from the runner.
+  # The master password is read at run time from the RDS-managed secret —
+  # nothing is stored in GitHub.
+  migrate:
+    name: Run Database Migrations
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Read DB password from Secrets Manager
+        run: |
+          SECRET=$(aws secretsmanager get-secret-value \
+            --secret-id "${{ vars.DB_SECRET_ARN }}" \
+            --query SecretString --output text)
+          PASSWORD=$(echo "$SECRET" | jq -r .password)
+          echo "::add-mask::$PASSWORD"
+          echo "DB_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
+
+      - name: Run Flyway migrations
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/migrations:/flyway/migrations" \
+            flyway/flyway:10 \
+            -url="jdbc:postgresql://${{ vars.DB_HOST }}:5432/${{ vars.TF_VAR_DB_NAME }}?sslmode=require" \
+            -user="${{ vars.TF_VAR_DB_USERNAME }}" \
+            -password="$DB_PASSWORD" \
+            -locations=filesystem:/flyway/migrations \
+            migrate
+
   deploy:
     name: Build & Deploy to ECS
     runs-on: ubuntu-latest
+    needs: [migrate]
 
     steps:
       - name: Checkout

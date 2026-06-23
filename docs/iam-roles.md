@@ -269,10 +269,18 @@ This role needs two sets of permissions:
       "Effect": "Allow",
       "Action": ["cloudfront:CreateInvalidation"],
       "Resource": "*"
+    },
+    {
+      "Sid": "ReadDbSecretForMigrations",
+      "Effect": "Allow",
+      "Action": ["secretsmanager:GetSecretValue"],
+      "Resource": "arn:aws:secretsmanager:*:YOUR_ACCOUNT_ID:secret:rds!db-*"
     }
   ]
 }
 ```
+
+> The `ReadDbSecretForMigrations` statement lets `backend-deploy.yml` read the RDS-managed master password at deploy time to run migrations. RDS-managed secrets are named `rds!db-<uuid>`.
 
 > You can combine both policies into a single inline policy or attach them as two separate managed policies — either works. Replace `YOUR_ACCOUNT_ID`, `YOUR_ORG/YOUR_REPO`, and `YOUR_PROJECT_NAME` with actual values.
 
@@ -285,11 +293,11 @@ This role needs two sets of permissions:
 Used by the ECS control plane to:
 - Pull container images from ECR
 - Write logs to CloudWatch
-- Read the `DATABASE_URL` secret from Secrets Manager
+- Read the RDS-managed master password from Secrets Manager
 
 Attached policies:
 - `arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy` (managed)
-- Inline policy granting `secretsmanager:GetSecretValue` on the `<project>/db-url` secret
+- Inline policy granting `secretsmanager:GetSecretValue` on the RDS-managed master user secret (`rds!db-*`)
 
 ---
 

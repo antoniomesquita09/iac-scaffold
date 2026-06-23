@@ -84,7 +84,8 @@ Go to your GitHub repo → **Settings → Secrets and variables → Actions**.
 | Secret name | Value |
 |---|---|
 | `AWS_ROLE_ARN` | `arn:aws:iam::YOUR_ACCOUNT_ID:role/GitHubActionsDeployRole` |
-| `TF_VAR_DB_PASSWORD` | Your database password |
+
+> There is no `TF_VAR_DB_PASSWORD`: RDS generates and manages the master password in Secrets Manager, and the migration job reads it at run time from the RDS-managed secret.
 
 ### Variables (non-sensitive — visible in logs)
 
@@ -114,6 +115,8 @@ Go to your GitHub repo → **Settings → Secrets and variables → Actions**.
 | `ECS_SERVICE` | `terraform output ecs_service_name` | `myapp-service` |
 | `ECS_TASK_DEFINITION` | `terraform output ecs_task_definition_family` | `myapp` |
 | `CONTAINER_NAME` | `terraform output container_name` | `myapp` |
+| `DB_HOST` | `terraform output db_host` | `myapp-db.abc123.us-east-1.rds.amazonaws.com` |
+| `DB_SECRET_ARN` | `terraform output db_secret_arn` | `arn:aws:secretsmanager:us-east-1:123456789:secret:rds!db-...` |
 
 **Frontend-specific** (from `terraform output` in `infra/frontend/`):
 
@@ -130,11 +133,14 @@ Go to your GitHub repo → **Settings → Secrets and variables → Actions**.
 
 The app deploy workflows trigger on changes to your app directories. Update the `paths:` filters to match your repo layout:
 
-**`backend-deploy.yml`** — change `app/**` to wherever your Go code lives:
+**`backend-deploy.yml`** — change `app/**` to wherever your Go code lives, and `migrations/**` to wherever your Flyway SQL files live:
 ```yaml
 paths:
   - 'app/**'           # ← update to your Go project directory
+  - 'migrations/**'    # ← update to your Flyway migrations directory
 ```
+
+The migration job mounts `migrations/` into the Flyway container (`-v "${{ github.workspace }}/migrations:/flyway/migrations"`). If your SQL files live elsewhere, update that path too.
 
 **`frontend-deploy.yml`** — change `web/**` to wherever your Next.js project lives:
 ```yaml
@@ -176,11 +182,14 @@ Infrastructure updated ✓
 ### Backend app deploy
 
 ```
-Push to main with app/** changes
+Push to main with app/** or migrations/** changes
      │
      ▼
 backend-deploy.yml
-  docker build → push to ECR
+  migrate job: read DB password from Secrets Manager → run Flyway
+     │  (deploy waits for migrate to succeed)
+     ▼
+  deploy job: docker build → push to ECR
   Render new ECS task definition
   aws ecs update-service (rolling, waits for stability)
      │

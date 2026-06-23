@@ -47,7 +47,7 @@ resource "aws_security_group" "ecs" {
 
 resource "aws_security_group" "rds" {
   name        = "${var.project_name}-rds-sg"
-  description = "Allow PostgreSQL from ECS tasks only"
+  description = "Allow PostgreSQL from ECS tasks and from migration runners"
   vpc_id      = aws_vpc.main.id
 
   ingress {
@@ -55,6 +55,17 @@ resource "aws_security_group" "rds" {
     to_port         = 5432
     protocol        = "tcp"
     security_groups = [aws_security_group.ecs.id]
+  }
+
+  # Public ingress so migrations can run from GitHub Actions (runners have no
+  # fixed IPs). The DB is still protected by its master credentials. To tighten
+  # this, replace 0.0.0.0/0 with GitHub's published Actions IP ranges, or move
+  # migrations to an in-VPC ECS run-task and drop this rule entirely.
+  ingress {
+    from_port   = 5432
+    to_port     = 5432
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   egress {

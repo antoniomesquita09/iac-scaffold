@@ -8,5 +8,5 @@ fargate_cpu       = 256
 fargate_memory    = 512
 db_name           = "appdb"
 db_username       = "appuser"
-db_password       = "CHANGE_ME_USE_A_STRONG_PASSWORD"
+# No db_password: RDS generates and manages the master password in Secrets Manager.
 db_instance_class = "db.t3.micro"
